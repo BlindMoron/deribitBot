@@ -1,5 +1,5 @@
-# Бот для сбора информации по аккаунту на бирже Deribit.com
-
+# DeribitBot
+### Бот для сбора информации по аккаунту на бирже Deribit.com
 Для базы данных используется Postgres:
 user=postgres dbname=ExchangeBot host=127.0.0.1 port=5432 sslmode=disable
 
