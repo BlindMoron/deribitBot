@@ -1,7 +1,6 @@
 package main
 
 import (
-	"GoRepo/deribitBot/pkg/urShadow/go-vk-api"
 	"database/sql"
 	"fmt"
 	"log"
@@ -14,21 +13,38 @@ import (
 	"github.com/adampointer/go-deribit/client/operations"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	_ "github.com/lib/pq"
+	"github.com/urShadow/go-vk-api"
 )
 
-// Переработать функции чтобыработали как в вк так и в тг
 // /position проверка на существующие позиции. if Работает не корректно
 func main() {
 	api := vk.New("ru")
-	err := api.Init("45072d656ce977e98e910ccb5fd07f2e4f312c4b0a5bc1aa6c8f68c9ec2bf49a919fd7968ed048ca5b89e")
+	err := api.Init("")
 	if err != nil {
 		log.Fatalln(err)
 	} else {
 		fmt.Print("Auth vk OK \n")
 	}
-	bot, err := tgbotapi.NewBotAPI("855439174:AAFj2g1wvUJ0IoAxpCFfWmifj4pNcyVF_eQ")
+	// Bot init
+	//Without SOCKS5
+	bot, err := tgbotapi.NewBotAPI("")
+	//tg proxy SOCKS5
+	/*tr := http.Transport{
+		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+			socksDialer, err := proxy.SOCKS5("tcp", "2.234.226.32:17779", &proxy.Auth{}, proxy.Direct)
+			if err != nil {
+				return nil, err
+			}
+			return socksDialer.Dial(network, addr)
+		},
+	}
+	bot, err := tgbotapi.NewBotAPIWithClient("", &http.Client{
+		Transport: &tr,
+	})*/
 	if err != nil {
-		fmt.Printf("error: ", err)
+
+		log.Fatal(err)
+
 	}
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 	go tgReadMessage(bot)
@@ -51,69 +67,72 @@ func tgReadMessage(bot *tgbotapi.BotAPI) {
 			continue
 		}
 		log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
-		key, skey := getKeys(0, update.Message.From.UserName) //get deribit keys
-		if key != "" && skey != "" {
-			e := authExchange(key, skey)
-			switch {
-			case update.Message.Text == "/help":
-				str := `/add - 'key' 'skey'
-				/position - current positions
-				/balance - Current balance
-				/alert BTC/ETH 6000 - make alert on currency
-				/index - get current index
-				/history - balance graph`
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, str)
-				bot.Send(msg)
-			case update.Message.Text == "/position":
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, getPosition(e))
-				bot.Send(msg)
-			case update.Message.Text == "/balance": //ПОСТРОИТЬ ГРАФИК
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, getBalance(e))
-				bot.Send(msg)
-			case strings.Contains(update.Message.Text, "/alert"):
-				splitMsg := strings.Split(update.Message.Text, " ")
-				if len(splitMsg) == 3 {
-					price, err := strconv.ParseFloat(splitMsg[2], 64)
-					if err != nil {
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Try again: /alert BTC/ETH 6000")
-						bot.Send(msg)
+		if strings.Contains(update.Message.Text, "/add") {
+			go tgAddUser(bot, update.Message.From.UserName, update.Message.Text, update.Message.Chat.ID)
+		} else {
+			key, skey := getKeys(0, update.Message.From.UserName) //get deribit keys
+			if key != "" && skey != "" {
+				e := authExchange(key, skey)
+				switch {
+				case update.Message.Text == "/help":
+					str := `/add - 'key' 'skey'
+					/position - current positions
+					/balance - Current balance
+					/alert BTC/ETH 6000 - make alert on currency
+					/index - get current index
+					/history - balance graph`
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, str)
+					bot.Send(msg)
+				case update.Message.Text == "/position":
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, getPosition(e))
+					bot.Send(msg)
+				case update.Message.Text == "/balance": //ПОСТРОИТЬ ГРАФИК
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, getBalance(e))
+					bot.Send(msg)
+				case strings.Contains(update.Message.Text, "/alert"):
+					splitMsg := strings.Split(update.Message.Text, " ")
+					if len(splitMsg) == 3 {
+						price, err := strconv.ParseFloat(splitMsg[2], 64)
+						if err != nil {
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Try again: /alert BTC/ETH 6000")
+							bot.Send(msg)
+						} else {
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Alert established at "+splitMsg[2])
+							bot.Send(msg)
+							go alertPrice(nil, "", bot, update.Message.Chat.ID, price, splitMsg[1], e)
+						}
 					} else {
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Alert established at "+splitMsg[2])
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "You wrote somethig wrong\n /alert BTC/ETH 6000")
 						bot.Send(msg)
-						go alertPrice(nil, "", update.Message.From.UserName, price, splitMsg[1], e)
 					}
-				} else {
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "You wrote somethig wrong\n /alert BTC/ETH 6000")
+				case update.Message.Text == "/index":
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Current mark price BTC: "+floatToString(getPrice(e, "BTC"))+"\nCurrent mark price ETH: "+floatToString(getPrice(e, "ETH")))
+					bot.Send(msg)
+				/*case msg.Text == "/history":
+				go getBalanceHistory(e)*/
+				default:
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Unknown command")
 					bot.Send(msg)
 				}
-			case update.Message.Text == "/index":
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Current mark price BTC: "+floatToString(getPrice(e, "BTC"))+"\nCurrent mark price ETH: "+floatToString(getPrice(e, "ETH")))
-				bot.Send(msg)
-			/*case msg.Text == "/history":
-			go getBalanceHistory(e)*/
-			case strings.Contains(update.Message.Text, "/add"):
-				go tgAddUser(bot, update.Message.From.UserName, update.Message.Text, update.Message.Chat.ID)
-			default:
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Unknown command")
-				bot.Send(msg)
-			}
-		} else {
-			if update.Message.Text == "/start" {
-				str := `В первую очередь вам нужно добавить api ключи. Получить их можно здесь: https://www.deribit.com/main#/account?scrollTo=api
-				Вопросы можно задать тут: https://t-do.ru/joinchat/Hk9v0RZZcRcvy-cDDL4_-A
-				Бот умеет:
-				/add - 'key' 'skey'
-				/position - current positions 
-				/balance - Current balance
-				/alert BTC/ETH 6000 - make alert on currency
-				/index - get current index
-				/history - balance graph(Не работает на данный момент)
-				`
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, str)
-				bot.Send(msg)
 			} else {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "First of all you need connect deribit with api\n")
-				bot.Send(msg)
+				if update.Message.Text == "/start" {
+					str := `В первую очередь вам нужно добавить api ключи. Получить их можно здесь: https://www.deribit.com/main#/account?scrollTo=api, затем использовать команду: /add 'key' 'skey'
+					Также доступна группа вк: https://vk.com/club176452271 Ключи добавлять нужно на каждой платформе отдельно!
+					Вопросы можно задать тут: https://t-do.ru/joinchat/Hk9v0RZZcRcvy-cDDL4_-A
+					Бот умеет:
+					/add - 'key' 'skey'
+					/position - current positions 
+					/balance - Current balance
+					/alert BTC/ETH 6000 - make alert on currency
+					/index - get current index
+					/history - balance graph(Не работает на данный момент)
+					`
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, str)
+					bot.Send(msg)
+				} else {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "First of all you need connect deribit with api\n")
+					bot.Send(msg)
+				}
 			}
 		}
 
@@ -163,22 +182,23 @@ func vkReadMessage(api *vk.VK, msg *vk.LPMessage) {
 							vkSendMessage(api, "Try again: /alert BTC/ETH 6000", id)
 						} else {
 							go vkSendMessage(api, "Alert established at "+splitMsg[2], id)
-							go alertPrice(api, id, "", price, splitMsg[1], e)
+							go alertPrice(api, id, nil, 0, price, splitMsg[1], e)
 						}
+					} else {
+						vkSendMessage(api, "Try again: /alert BTC/ETH 6000", id)
 					}
 				case msg.Text == "/index":
 					go vkSendMessage(api, "Current mark price BTC: "+floatToString(getPrice(e, "BTC"))+"\nCurrent mark price ETH: "+floatToString(getPrice(e, "ETH")), id)
 				/*case msg.Text == "/history":
 				go getBalanceHistory(e)*/
-				case strings.Contains(msg.Text, "/add"):
-					go vkAddUser(api, msg.Text, id)
 				default:
 					vkSendMessage(api, "Unknown command", id)
 				}
 			} else {
-				if msg.Text == "/start" {
-					str := `В первую очередь вам нужно добавить api ключи. Получить их можно здесь: https://www.deribit.com/main#/account?scrollTo=api
-					Вопросы можно задать тут: https://t-do.ru/joinchat/Hk9v0RZZcRcvy-cDDL4_-A
+				switch {
+				case msg.Text == "/start":
+					str := `В первую очередь вам нужно добавить api ключи. Получить их можно здесь: https://www.deribit.com/main#/account?scrollTo=api, затем использовать команду: /add 'key' 'skey'
+					Также доступна группа вк: https://vk.com/club176452271 Ключи добавлять нужно на каждой платформе отдельно!
 					Бот умеет:
 					/add - 'key' 'skey'
 					/position - current positions 
@@ -188,7 +208,7 @@ func vkReadMessage(api *vk.VK, msg *vk.LPMessage) {
 					/history - balance graph(Не работает на данный момент)
 					`
 					go vkSendMessage(api, str, id)
-				} else {
+				default:
 					go vkSendMessage(api, "First of all you need connect deribit with api\n /add - 'key' 'skey'", id)
 				}
 			}
@@ -231,13 +251,13 @@ func getKeys(id int64, name string) (string, string) {
 		var key string
 		err = row.Scan(&key)
 		if err == sql.ErrNoRows {
-			fmt.Println("Не найдено записей")
+			fmt.Println("There is no keys in database")
 		}
 		row = db.QueryRow("SELECT deribitskey FROM users WHERE vkid = $1", id)
 		var skey string
 		err = row.Scan(&skey)
 		if err == sql.ErrNoRows {
-			fmt.Println("Не найдено записей")
+			fmt.Println("There is no keys in database")
 		}
 		db.Close()
 		return key, skey
@@ -246,14 +266,15 @@ func getKeys(id int64, name string) (string, string) {
 		var key string
 		err = row.Scan(&key)
 		if err == sql.ErrNoRows {
-			fmt.Println("Не найдено записей")
+			fmt.Println("There is no secret keys in database")
 		}
 		row = db.QueryRow("SELECT deribitskey FROM users WHERE tgname = $1", name)
 		var skey string
 		err = row.Scan(&skey)
 		if err == sql.ErrNoRows {
-			fmt.Println("Не найдено записей")
+			fmt.Println("There is no secret keys in database")
 		}
+		fmt.Println(key + " " + skey)
 		db.Close()
 		return key, skey
 	}
@@ -270,25 +291,36 @@ func addUserDB(id string, name string, key string, skey string) {
 	if err != nil {
 		fmt.Println("Connect to DB err: ", err)
 	}
-	//check if user already added in another messenger
-
 	switch {
-	case name != "": //tg add user without vkid
-		var lastID int
-		query := "INSERT INTO users(vkid, tgname, deribitkey, deribitskey) VALUES('', $1, $2, $3) RETURNING id"
-		row := db.QueryRow(query, name, key, skey)
-		err = row.Scan(&lastID)
-		fmt.Println(lastID)
-		fmt.Println(err)
+	case name != "":
+		var checkID int
+		row := db.QueryRow("SELECT id FROM users WHERE deribitkey = $1", key)
+		err := row.Scan(&checkID)
+		if err == sql.ErrNoRows {
+			query := "INSERT INTO users(vkid, tgname, deribitkey, deribitskey) VALUES($1, $2, $3, $4) RETURNING id" //tg add user without vkid
+			db.QueryRow(query, 0, name, key, skey)
+		} else {
+			query := "UPDATE users SET tgname = $1 WHERE id = $2" //if row exist add tgname to row
+			fmt.Println("Update")
+			db.Exec(query, name, checkID)
+		}
 		db.Close()
 	case id != "": //vk add user without tgname
-		var lastID int
-		query := "INSERT INTO users(vkid, tgname, deribitkey, deribitskey) VALUES($1, '', $2, $3) RETURNING id"
-		i, _ := strconv.Atoi(id)
-		row := db.QueryRow(query, i, key, skey)
-		err = row.Scan(&lastID)
-		fmt.Println(lastID)
-		fmt.Println(err)
+		var checkID int
+		row := db.QueryRow("SELECT id FROM users WHERE deribitkey = $1", key)
+		fmt.Println("id")
+		err := row.Scan(&checkID)
+		if err == sql.ErrNoRows {
+			//New user with new keys
+			query := "INSERT INTO users(vkid, tgname, deribitkey, deribitskey) VALUES($1, '', $2, $3) RETURNING id" //vk add user without tgname
+			i, _ := strconv.Atoi(id)
+			fmt.Println("Insert")
+			db.QueryRow(query, i, key, skey)
+		} else {
+			query := "UPDATE users SET vkid = $1 WHERE id = $2" //add vkid if row exist
+			fmt.Println("Update")
+			db.Exec(query, id, checkID)
+		}
 		db.Close()
 	}
 }
@@ -321,37 +353,50 @@ func authExchange(key string, skey string) *deribit.Exchange {
 	return e
 }
 
-func alertPrice(api *vk.VK, id string, name string, price float64, instrument string, e *deribit.Exchange) {
+func alertPrice(api *vk.VK, id string, bot *tgbotapi.BotAPI, chatID int64, price float64, instrument string, e *deribit.Exchange) string {
 	index := getPrice(e, instrument)
 	if price < index {
+		fmt.Println("Price < index")
 		for {
 			index = getPrice(e, instrument)
+			fmt.Println("Cicle " + floatToString(index))
 			if price >= index {
 				if api != nil {
 					go vkSendMessage(api, "Alert on price "+floatToString(price), id)
 					break
 				} else {
-
+					msg := tgbotapi.NewMessage(chatID, "Alert on price "+floatToString(price))
+					bot.Send(msg)
 					break
 				}
+			}
+			if price-index >= 1000 {
+				return "Price is higher on 1000 usd. Alert disposed"
 			}
 			time.Sleep(time.Second * 20)
 		}
 	} else {
+		fmt.Println("Price > index")
 		for {
 			index = getPrice(e, instrument)
+			fmt.Println("Cicle " + floatToString(index))
 			if price <= index {
 				if api != nil {
 					go vkSendMessage(api, "Alert on price "+floatToString(price), id)
 					break
 				} else {
-
+					msg := tgbotapi.NewMessage(chatID, "Alert on price "+floatToString(price))
+					bot.Send(msg)
 					break
 				}
+			}
+			if index-price >= 1000 {
+				return "Price is lower on 1000 usd. Alert disposed"
 			}
 			time.Sleep(time.Second * 20)
 		}
 	}
+	return ""
 }
 
 func getPrice(e *deribit.Exchange, instrument string) float64 {
@@ -365,9 +410,9 @@ func getPrice(e *deribit.Exchange, instrument string) float64 {
 		fmt.Println("Error getting index: ", err)
 	}
 	switch {
-	case instrument == "BTC":
+	case instrument == "BTC" || instrument == "btc":
 		return *indexBTC.Payload.Result.BTC
-	case instrument == "ETH":
+	case instrument == "ETH" || instrument == "eth":
 		return indexETH.Payload.Result.ETH
 	}
 	return 1.0
@@ -377,46 +422,59 @@ func getPosition(e *deribit.Exchange) string {
 	client := e.Client()
 	//get positions for BTC
 	var str string
+	var counter = false
 	positionsBTC, err := client.GetPrivateGetPositions(&operations.GetPrivateGetPositionsParams{Currency: "BTC"})
 	if err != nil {
-		fmt.Println("Error getting positions: ", err)
+		fmt.Println("Error getting positions BTC: ", err)
+		str = str + "\nNo positions BTC"
 	}
-	//Переработать. Хуйня какая то!!
 	if len(positionsBTC.Payload.Result) > 0 {
-		if *positionsBTC.Payload.Result[0].AveragePrice > 0.0 {
-			str = str + "BTC"
-			for i := 0; i < len(positionsBTC.Payload.Result); i++ {
+		str = str + "BTC\n"
+		for i := 0; i < len(positionsBTC.Payload.Result); i++ {
+			if *positionsBTC.Payload.Result[i].Size != 0.0 {
+				ins := positionsBTC.Payload.Result[i].InstrumentName
 				avg := *positionsBTC.Payload.Result[i].AveragePrice
-				index := positionsBTC.Payload.Result[i].IndexPrice
+				index := positionsBTC.Payload.Result[i].MarkPrice
+				liq := positionsBTC.Payload.Result[i].EstimatedLiquidationPrice
 				eqt := positionsBTC.Payload.Result[i].Size
-				pnl := *positionsBTC.Payload.Result[i].FloatingProfitLoss
+				pnl := *positionsBTC.Payload.Result[i].TotalProfitLoss
 				usd := pnl * getPrice(e, "BTC")
-				str = str + "\nCount: " + floatToString(*eqt) + "\nEntry: " + floatToString(avg) + "\nIndex: " + floatToString(*index) + "\nProfitLoss: BTC " + floatToString(pnl) + "  $" + floatToString(usd) + " ₽" + floatToString(usd*65)
+				counter = true
+				str = str + "\nInstrument: " + ins + "\nCount: " + floatToString(*eqt) + "\nEntry: " + floatToString(avg) + "\nIndex: " + floatToString(*index) + "\nEst. Liq. Price: " + floatToString(liq) + "\nPL: BTC " + floatToString(pnl) + "  $" + floatToString(usd) + " ₽" + floatToString(usd*65) + "\n"
 			}
-		} else {
+		}
+		if counter == false {
 			str = str + "\nNo positions BTC"
 		}
 	} else {
 		str = str + "\nNo positions BTC"
 	}
 	//get positions for ETH
+	counter = false
 	positionsETH, err := client.GetPrivateGetPositions(&operations.GetPrivateGetPositionsParams{Currency: "ETH"})
 	if err != nil {
-		fmt.Println("Error getting positions: ", err)
-	}
-	if len(positionsETH.Payload.Result) > 0 {
-		str = str + "ETH"
-		for i := 0; i < len(positionsETH.Payload.Result); i++ {
-			fmt.Println(positionsETH)
-			avg := *positionsETH.Payload.Result[i].AveragePrice
-			index := positionsETH.Payload.Result[i].IndexPrice
-			eqt := positionsETH.Payload.Result[i].Size
-			pnl := *positionsETH.Payload.Result[i].FloatingProfitLoss
-			usd := pnl * getPrice(e, "ETH")
-			str = str + "\nCount: " + floatToString(*eqt) + "\nEntry: " + floatToString(avg) + "\nIndex: " + floatToString(*index) + "\nProfitLoss: BTC " + floatToString(pnl) + "  $" + floatToString(usd) + " ₽" + floatToString(usd*65)
-		}
-	} else {
+		fmt.Println("Error getting positions ETH: ", err)
 		str = str + "\nNo positions ETH"
+	} else {
+		if len(positionsETH.Payload.Result) > 0 {
+			str = str + "\nETH\n"
+			for i := 0; i < len(positionsETH.Payload.Result); i++ {
+				if *positionsETH.Payload.Result[i].Size != 0.0 {
+					ins := positionsETH.Payload.Result[i].InstrumentName
+					avg := *positionsETH.Payload.Result[i].AveragePrice
+					index := *positionsETH.Payload.Result[i].MarkPrice
+					liq := positionsETH.Payload.Result[i].EstimatedLiquidationPrice
+					eqt := positionsETH.Payload.Result[i].Size
+					pnl := *positionsETH.Payload.Result[i].FloatingProfitLoss
+					usd := pnl * getPrice(e, "ETH")
+					counter = true
+					str = str + "\nInstrument: " + ins + "\nCount: " + floatToString(*eqt) + "\nEntry: " + floatToString(avg) + "\nIndex: " + floatToString(index) + "\nEst. Liq. Price: " + floatToString(liq) + "\nPL: ETH " + floatToString(pnl) + "  $" + floatToString(usd) + " ₽" + floatToString(usd*65) + "\n"
+				}
+			}
+			if counter == false {
+				str = str + "\nNo positions ETH"
+			}
+		}
 	}
 	return str
 }
